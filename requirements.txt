@@ -17,7 +17,7 @@ tqdm
 pylatex>=1.4.1
 openpyxl
 python-latex
-reportlab
+reportlab>=4.0.4
 nodejs
 md-to-pdf
 python-dotenv

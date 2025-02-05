@@ -158,32 +158,58 @@ def display_papers():
                     core_points = extract_core_points(analysis)
                     st.markdown(core_points)
             
-            # 下载全文分析报告
+            # 检查 PDF 生成结果
             if st.session_state.output_files:
-                pdf_path = st.session_state.output_files.get('pdf', '')
-                if pdf_path:
+                pdf_path = st.session_state.output_files.get('pdf')
+                md_path = st.session_state.output_files.get('markdown')
+                
+                # PDF 下载按钮
+                if pdf_path and os.path.exists(pdf_path):
                     st.download_button(
-                        label="下载全文分析报告",
+                        label="下载 PDF 分析报告",
                         data=open(pdf_path, 'rb').read(),
                         file_name=os.path.basename(pdf_path),
-                        mime='application/pdf',
-                        key="download_full_analysis"
+                        mime='application/pdf'
+                    )
+                else:
+                    st.warning("PDF 生成失败，提供 Markdown 下载")
+                
+                # Markdown 下载按钮（作为备选）
+                if md_path and os.path.exists(md_path):
+                    st.download_button(
+                        label="下载 Markdown 分析报告",
+                        data=open(md_path, 'rb').read(),
+                        file_name=os.path.basename(md_path),
+                        mime='text/markdown'
                     )
         else:
             # 摘要分析：展示亮点速览
             with st.expander("📊 亮点速览", expanded=True):
                 st.markdown(st.session_state.analyses[0])
             
-            # 下载摘要分析报告
+            # 检查 PDF 生成结果
             if st.session_state.output_files:
-                pdf_path = st.session_state.output_files.get('pdf', '')
-                if pdf_path:
+                pdf_path = st.session_state.output_files.get('pdf')
+                md_path = st.session_state.output_files.get('markdown')
+                
+                # PDF 下载按钮
+                if pdf_path and os.path.exists(pdf_path):
                     st.download_button(
-                        label="下载摘要分析报告",
+                        label="下载 PDF 分析报告",
                         data=open(pdf_path, 'rb').read(),
                         file_name=os.path.basename(pdf_path),
-                        mime='application/pdf',
-                        key="download_summary_analysis"
+                        mime='application/pdf'
+                    )
+                else:
+                    st.warning("PDF 生成失败，提供 Markdown 下载")
+                
+                # Markdown 下载按钮（作为备选）
+                if md_path and os.path.exists(md_path):
+                    st.download_button(
+                        label="下载 Markdown 分析报告",
+                        data=open(md_path, 'rb').read(),
+                        file_name=os.path.basename(md_path),
+                        mime='text/markdown'
                     )
         
         # 再展示论文列表

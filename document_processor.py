@@ -15,6 +15,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
 import platform
 from utils.document_converter import DocumentConverter
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 class AnalysisType(Enum):
     SUMMARY = "summary"  # 摘要分析
@@ -174,35 +175,39 @@ class DocumentProcessor:
             r'\usepackage{mathrsfs}'  # 提供花体字符
         ])
 
-    def process_papers(self, 
-                      papers: List[Dict],
-                      analysis_type: AnalysisType,
-                      analysis_result: Union[str, List[str]]) -> Dict[str, str]:
+    def process_papers(self, papers: List[Dict], analysis_type: AnalysisType, analysis_result: Union[str, List[str]]) -> Dict[str, str]:
         """统一的论文处理接口"""
-        # 生成基础文件名
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-        base_filename = f"paper_analysis_{timestamp}"
+        try:
+            # 生成基础文件名
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            base_filename = f"paper_analysis_{timestamp}"
+            
+            # 确保 analysis_result 是列表
+            if isinstance(analysis_result, str):
+                analysis_result = [analysis_result]
+            
+            # 根据分析类型选择不同的格式化方法
+            if analysis_type == AnalysisType.SUMMARY:
+                content = self._format_summary_analysis(papers, analysis_result[0])
+            else:
+                content = self._format_full_analysis(papers, analysis_result)
+            
+            # 保存不同格式
+            outputs = {}
+            outputs['markdown'] = self._save_markdown(content, base_filename)
+            
+            # 尝试生成 PDF
+            pdf_path = self._generate_pdf_fallback(content, base_filename)
+            if pdf_path:
+                outputs['pdf'] = pdf_path
+            else:
+                print("警告：PDF 生成失败，仅提供 Markdown 文件")
+            
+            return outputs
         
-        # 确保 analysis_result 是列表
-        if isinstance(analysis_result, str):
-            analysis_result = [analysis_result]
-        
-        # 根据分析类型选择不同的格式化方法
-        if analysis_type == AnalysisType.SUMMARY:
-            content = self._format_summary_analysis(papers, analysis_result[0])
-        else:
-            content = self._format_full_analysis(papers, analysis_result)
-        
-        # 保存不同格式
-        outputs = {}
-        outputs['markdown'] = self._save_markdown(content, base_filename)
-        
-        # 尝试多种 PDF 生成方式
-        pdf_path = self._generate_pdf_fallback(content, base_filename)
-        if pdf_path:
-            outputs['pdf'] = pdf_path
-        
-        return outputs
+        except Exception as e:
+            print(f"文档处理失败: {str(e)}")
+            return {'markdown': None, 'pdf': None}
 
     def _format_summary_analysis(self, papers: List[Dict], analyses: Union[str, List[str]]) -> str:
         """格式化摘要分析结果"""
@@ -437,13 +442,201 @@ class DocumentProcessor:
         # 调用 DocumentConverter 的 md_to_pdf 方法
         return self.document_converter.md_to_pdf(md_path)
 
-    def _generate_pdf_fallback(self, content: str, filename: str) -> Optional[str]:
-        """尝试 PDF 生成方法"""
+    def _generate_pdf_with_weasyprint(self, content: str, filename: str) -> Optional[str]:
+        """使用 WeasyPrint 转换"""
         try:
-            pdf_path = self._generate_pdf_with_markdown(content, filename)
-            if pdf_path and os.path.exists(pdf_path):
-                return pdf_path
-        except Exception as e:
-            print(f"PDF 生成失败: {str(e)}")
+            from weasyprint import HTML, CSS
+            from weasyprint.text.fonts import FontConfiguration
+            
+            # 转换 Markdown 为 HTML
+            html_content = markdown.markdown(content)
+            
+            # 添加样式
+            css = CSS(string='''
+                body { font-family: Arial, sans-serif; }
+                h1 { color: #2c3e50; }
+                h2 { color: #34495e; }
+                pre { background-color: #f8f9fa; padding: 1em; }
+            ''')
+            
+            # 生成 PDF
+            pdf_path = os.path.join(self.output_dir, f"{filename}.pdf")
+            HTML(string=html_content).write_pdf(
+                pdf_path,
+                stylesheets=[css],
+                font_config=FontConfiguration()
+            )
+            return pdf_path
         
-        return None 
+        except Exception as e:
+            print(f"WeasyPrint 转换失败: {str(e)}")
+            return None
+
+    def _generate_pdf_with_reportlab(self, content: str, filename: str) -> Optional[str]:
+        """使用 ReportLab 转换，支持中文和数学公式"""
+        try:
+            from reportlab.lib import colors
+            from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+            from reportlab.lib.units import inch
+            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+            
+            pdf_path = os.path.join(self.output_dir, f"{filename}.pdf")
+            doc = SimpleDocTemplate(pdf_path)
+            
+            # 创建样式
+            styles = getSampleStyleSheet()
+            custom_style = ParagraphStyle(
+                'CustomStyle',
+                parent=styles['Normal'],
+                fontName=self.font_manager.get_default_font(),
+                fontSize=10,
+                leading=14,
+                firstLineIndent=20
+            )
+            
+            # 处理内容
+            story = []
+            for line in content.split('\n'):
+                if line.startswith('#'):
+                    # 处理标题
+                    level = line.count('#')
+                    text = line.strip('#').strip()
+                    style = styles[f'Heading{min(level, 4)}']
+                else:
+                    # 处理正文
+                    text = line
+                    style = custom_style
+                
+                if text:
+                    # 处理数学公式
+                    text = self._process_math_for_reportlab(text)
+                    story.append(Paragraph(text, style))
+                    story.append(Spacer(1, 0.1 * inch))
+            
+            # 生成 PDF
+            doc.build(story)
+            return pdf_path
+            
+        except Exception as e:
+            print(f"ReportLab 转换失败: {str(e)}")
+            return None
+
+    def _process_math_for_reportlab(self, text: str) -> str:
+        """处理数学公式"""
+        import re
+        
+        # 替换行内公式
+        text = re.sub(r'\$(.+?)\$', r'<i>\1</i>', text)
+        
+        # 替换行间公式
+        text = re.sub(r'\$\$(.+?)\$\$', r'<br/><i>\1</i><br/>', text)
+        
+        return text
+
+    def _generate_pdf_with_pdfkit(self, content: str, filename: str) -> Optional[str]:
+        """使用 PDFKit 转换"""
+        try:
+            import pdfkit
+            
+            # 转换 Markdown 为 HTML
+            html_content = markdown.markdown(content)
+            
+            # PDFKit 配置
+            options = {
+                'encoding': 'UTF-8',
+                'page-size': 'A4',
+                'margin-top': '0.75in',
+                'margin-right': '0.75in',
+                'margin-bottom': '0.75in',
+                'margin-left': '0.75in',
+                'enable-local-file-access': None
+            }
+            
+            # 添加基本样式
+            html_with_style = f"""
+            <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <style>
+                        body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                        h1 {{ color: #2c3e50; }}
+                        h2 {{ color: #34495e; }}
+                        pre {{ background-color: #f8f9fa; padding: 1em; }}
+                    </style>
+                </head>
+                <body>
+                    {html_content}
+                </body>
+            </html>
+            """
+            
+            # 生成 PDF
+            pdf_path = os.path.join(self.output_dir, f"{filename}.pdf")
+            pdfkit.from_string(html_with_style, pdf_path, options=options)
+            return pdf_path
+            
+        except Exception as e:
+            print(f"PDFKit 转换失败: {str(e)}")
+            if "wkhtmltopdf" in str(e):
+                print("请确保已安装 wkhtmltopdf:")
+                print("macOS: brew install wkhtmltopdf")
+                print("Linux: sudo apt-get install wkhtmltopdf")
+                print("Windows: 下载安装包：https://wkhtmltopdf.org/downloads.html")
+            return None
+
+    def _generate_pdf_fallback(self, content: str, filename: str) -> Optional[str]:
+        """多重 PDF 转换方案"""
+        methods = [
+            (self._generate_pdf_with_markdown, "md-to-pdf"),    # 首选方案
+            (self._generate_pdf_with_reportlab, "ReportLab"),   # 备选方案（纯 Python 实现）
+        ]
+        
+        for method, name in methods:
+            try:
+                print(f"尝试使用 {name} 转换 PDF...")
+                pdf_path = self._convert_with_retry(method, content, filename)
+                if pdf_path and os.path.exists(pdf_path):
+                    print(f"使用 {name} 转换成功")
+                    return pdf_path
+            except Exception as e:
+                print(f"{name} 转换失败: {str(e)}")
+                continue
+        
+        print("所有转换方法都失败，返回 None")
+        return None
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10)
+    )
+    def _convert_with_retry(self, method, content: str, filename: str) -> Optional[str]:
+        """带重试机制的转换方法"""
+        try:
+            result = method(content, filename)
+            # 验证生成的 PDF 文件
+            if result and os.path.exists(result) and os.path.getsize(result) > 0:
+                return result
+            raise Exception("PDF 生成失败或文件为空")
+        except Exception as e:
+            print(f"转换失败 ({method.__name__})，准备重试: {str(e)}")
+            raise
+
+    def _check_dependencies(self):
+        """检查必要的依赖是否安装"""
+        dependencies = {
+            'weasyprint': 'weasyprint',
+            'pdfkit': 'pdfkit',
+            'wkhtmltopdf': 'wkhtmltopdf'
+        }
+        
+        missing = []
+        for name, package in dependencies.items():
+            try:
+                __import__(name)
+            except ImportError:
+                missing.append(package)
+        
+        if missing:
+            print(f"缺少以下依赖: {', '.join(missing)}")
+            print("请使用以下命令安装:")
+            print(f"pip install {' '.join(missing)}") 
