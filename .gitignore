@@ -41,5 +41,4 @@ downloaded_papers/
 paper_analyses/
 
 # 配置文件
-config.py
 .env
