@@ -8,7 +8,7 @@ load_dotenv()
 # 安全获取配置，如果环境变量未设置则使用默认值
 OPENAI_CONFIG = {
     "api_key": os.getenv("OPENAI_API_KEY") or st.secrets.get("OPENAI_API_KEY", ""),
-    "base_url": os.getenv("OPENAI_BASE_URL") or st.secrets.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    "base_url": os.getenv("OPENAI_BASE_URL") or st.secrets.get("OPENAI_BASE_URL", "https://api.openai.xyz/v1")
 }
 
 DEEPSEEK_CONFIG = {
