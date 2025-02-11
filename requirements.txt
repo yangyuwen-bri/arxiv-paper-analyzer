@@ -21,3 +21,4 @@ reportlab>=4.0.4
 nodejs
 md-to-pdf
 python-dotenv
+langchain_nvidia_ai_endpoints

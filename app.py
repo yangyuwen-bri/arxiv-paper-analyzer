@@ -1,4 +1,11 @@
 import streamlit as st
+# 必须是第一个 Streamlit 命令
+st.set_page_config(
+    page_title="ArXiv论文分析工具",
+    page_icon="🔬",
+    layout="wide"
+)
+
 import sys
 import os
 import webbrowser
@@ -14,6 +21,7 @@ from document_processor import AnalysisType
 def init_session_state():
     """初始化会话状态"""
     if 'analyzer' not in st.session_state:
+        # 使用默认配置初始化
         st.session_state.analyzer = ArxivPaperAnalyzer()
     if 'papers' not in st.session_state:
         st.session_state.papers = []
@@ -25,14 +33,17 @@ def init_session_state():
 def sidebar_model_selection():
     """侧边栏模型选择"""
     st.sidebar.header("🤖 模型选择")
-    model_type = st.sidebar.radio(
-        label="选择模型类型",  # 添加有意义的标签
+    model_info = st.sidebar.radio(
+        label="选择模型类型",  
         options=["OpenAI", "DeepSeek"],
         index=0,
         horizontal=True,
-        label_visibility="collapsed"  # 如果不想显示标签，使用 collapsed
+        label_visibility="collapsed"
     )
-    return "openai" if model_type == "OpenAI" else "deepseek"
+    
+    return {
+        "model_type": "openai" if model_info == "OpenAI" else "deepseek"
+    }
 
 def load_arxiv_taxonomy():
     """加载ArXiv领域分类"""
@@ -114,13 +125,15 @@ def sidebar_search_options():
 
 def search_papers(model_type: str, search_options: Dict):
     """搜索论文"""
-    st.session_state.analyzer = ArxivPaperAnalyzer(model_type=model_type)
+    st.session_state.analyzer = ArxivPaperAnalyzer(
+        model_type=model_type
+    )
     
     with st.spinner("正在搜索和分析论文..."):
         query = st.text_input(
-            label="论文搜索",  # 添加有意义的标签
+            label="论文搜索",
             placeholder="输入研究主题，如：机器学习、计算机视觉、自然语言处理",
-            label_visibility="collapsed"  # 保持标签隐藏
+            label_visibility="collapsed"
         )
         
         if st.button("开始搜索"):
@@ -262,24 +275,18 @@ def extract_core_points(analysis: str) -> str:
         return "无法提取核心要点"
 
 def main():
-    st.set_page_config(
-        page_title="ArXiv论文分析工具",
-        page_icon="🔬",
-        layout="wide"
-    )
-    
     init_session_state()
     
     st.title("🌟 ArXiv 论文智能分析平台")
     
-    # 模型选择
-    model_type = sidebar_model_selection()
+    # 模型选择（简化后的版本）
+    model_config = sidebar_model_selection()
     
     # 搜索选项
     search_options = sidebar_search_options()
     
-    # 论文搜索区域
-    search_papers(model_type, search_options)
+    # 论文搜索区域（移除 provider_type）
+    search_papers(model_config["model_type"], search_options)
     
     # 论文展示
     display_papers()

@@ -2,10 +2,11 @@ import arxiv
 import time
 import logging
 from langchain_openai import ChatOpenAI
+from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langchain.chains import LLMChain
 from langchain.prompts import PromptTemplate
 from typing import List, Dict, Optional, Tuple, Any
-from config import OPENAI_CONFIG, DEEPSEEK_CONFIG
+from config import OPENAI_CONFIG, DEEPSEEK_CONFIG, NVIDIA_DEEPSEEK_CONFIG
 from tenacity import retry, stop_after_attempt, wait_exponential, before_log, after_log
 from datetime import datetime
 import requests
@@ -22,6 +23,10 @@ import math
 from openai import OpenAI
 from urllib.parse import quote
 from functools import wraps
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.outputs import LLMResult
+from typing import Union
+from langchain.schema import SystemMessage, HumanMessage
 
 # 设置日志
 logging.basicConfig(
@@ -42,6 +47,54 @@ def api_rate_limit(func):
         return func(*args, **kwargs)
     return wrapper
 
+class DeepSeekProvider:
+    """DeepSeek模型提供者，使用Nvidia接口"""
+    MAX_RETRIES = 3
+    RETRY_DELAY = 5
+    
+    def __init__(self):
+        self._init_client()
+    
+    @retry(
+        stop=stop_after_attempt(MAX_RETRIES),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        before=before_log(logger, logging.DEBUG),
+        after=after_log(logger, logging.DEBUG)
+    )
+    def _init_client(self):
+        """初始化客户端"""
+        logger.info("初始化 DeepSeek 客户端")
+        try:
+            self.client = ChatNVIDIA(
+                model="deepseek-ai/deepseek-r1",  # 修正：使用正确的模型标识符
+                api_key=NVIDIA_DEEPSEEK_CONFIG.get("api_key"),
+                temperature=0,  # 保持为0以获得确定性输出
+                top_p=1.0,     # 添加 top_p 参数
+                max_tokens=4096,
+                callbacks=[LoggingCallback()]
+            )
+        except Exception as e:
+            logger.error(f"初始化 DeepSeek 客户端失败: {str(e)}")
+            raise
+
+# 添加日志回调类
+class LoggingCallback(BaseCallbackHandler):
+    """记录 API 调用的回调处理器"""
+    def on_llm_start(self, serialized: Dict[str, Any], prompts: List[str], **kwargs: Any) -> None:
+        """当 LLM 开始时调用"""
+        logger.info("=== API 请求开始 ===")
+        logger.info(f"提示词: {prompts}")
+
+    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        """当 LLM 结束时调用"""
+        logger.info("=== API 响应详情 ===")
+        logger.info(f"响应内容: {response}")
+        logger.info("===================")
+
+    def on_llm_error(self, error: Union[Exception, KeyboardInterrupt], **kwargs: Any) -> None:
+        """当 LLM 出错时调用"""
+        logger.error(f"API 调用出错: {str(error)}")
+
 class ArxivPaperAnalyzer:
     # 添加类常量
     MAX_RETRIES = 3
@@ -60,23 +113,18 @@ class ArxivPaperAnalyzer:
         初始化分析器
         Args:
             model_type: 模型类型 ("openai" 或 "deepseek")
-            openai_api_key: API密钥
-            base_url: 自定义API地址
+            openai_api_key: OpenAI API密钥
+            base_url: OpenAI自定义API地址
         """
         if model_type == "openai":
             self.llm = ChatOpenAI(
                 temperature=0,
                 openai_api_key=openai_api_key or OPENAI_CONFIG["api_key"],
-                model_name="o1-preview",
+                model_name=OPENAI_CONFIG["model"],
                 base_url=base_url or OPENAI_CONFIG["base_url"]
             )
         elif model_type == "deepseek":
-            self.llm = ChatOpenAI(
-                temperature=0,
-                openai_api_key=DEEPSEEK_CONFIG.get("api_key"),
-                model_name="deepseek-chat",
-                base_url=DEEPSEEK_CONFIG.get("base_url")
-            )
+            self.llm = DeepSeekProvider().client
         else:
             raise ValueError("不支持的模型类型。请选择 'openai' 或 'deepseek'")
         
@@ -90,6 +138,8 @@ class ArxivPaperAnalyzer:
 领域：{field}
 摘要：{abstract}
 全文：{full_text}
+
+请直接按照以下固定格式输出分析结果，不要添加任何思考过程：
 
 请按照以下框架提供分析：
 
@@ -400,6 +450,31 @@ class ArxivPaperAnalyzer:
             print(f"PDF文本提取失败: {str(e)}")
             return ""
 
+    def _clean_thinking_chain(self, text: str) -> str:
+        """清理思维链输出"""
+        import re
+        
+        # 1. 先尝试找到第一个标题的位置
+        title_pos = text.find('# 🌟')
+        if title_pos == -1:
+            title_pos = text.find('#')
+        
+        if title_pos != -1:
+            # 直接截取从标题开始的内容
+            text = text[title_pos:]
+        else:
+            logger.warning("未找到标题标记")
+            return ""
+        
+        # 2. 清理格式
+        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+        text = text.strip()
+        
+        # 3. 添加日志
+        logger.debug(f"清理后的内容开头: {text[:100]}")
+        
+        return text
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def analyze_paper(self, paper: Dict, analyze_full_text: bool = False, field: str = "cs.AI") -> str:
         """分析单篇论文"""
@@ -407,20 +482,45 @@ class ArxivPaperAnalyzer:
             if analyze_full_text:
                 # 下载并提取PDF文本
                 pdf_path = self.download_pdf(paper['pdf_url'], paper['arxiv_url'])
-                print(f"\n论文PDF已下载到: {pdf_path}")
-                
-                # 使用PyMuPDF加载器提取全文
                 loader = PyMuPDFLoader(pdf_path)
                 pages = loader.load()
                 full_text = "\n".join(page.page_content for page in pages)
                 
-                # 分析全文
-                result = self.analysis_chain.invoke({
-                    "title": paper["title"],
-                    "abstract": paper["abstract"],
-                    "full_text": full_text,
-                    "field": field
-                })
+                # 构建消息
+                messages = [
+                    {"role": "user", "content": self.analysis_prompt.format(
+                        title=paper["title"],
+                        abstract=paper["abstract"],
+                        full_text=full_text,
+                        field=field
+                    )}
+                ]
+                
+                # 根据模型类型选择不同的调用方式
+                if isinstance(self.llm, ChatNVIDIA):
+                    response_text = ""
+                    for chunk in self.llm.stream(messages):
+                        response_text += chunk.content
+                    
+                    # 添加日志检查
+                    logger.debug("=== 清理前的内容 ===")
+                    logger.debug(response_text[:200])  # 只显示前200个字符
+                    
+                    cleaned_text = self._clean_thinking_chain(response_text)
+                    
+                    logger.debug("=== 清理后的内容 ===")
+                    logger.debug(cleaned_text[:200])  # 只显示前200个字符
+                    
+                    return cleaned_text
+                else:
+                    # OpenAI 模型使用原有方式
+                    result = self.analysis_chain.invoke({
+                        "title": paper["title"],
+                        "abstract": paper["abstract"],
+                        "full_text": full_text,
+                        "field": field
+                    })
+                    return result.get('text', '') if isinstance(result, dict) else result
             else:
                 # 仅分析摘要
                 result = self.analysis_chain.invoke({
@@ -429,11 +529,13 @@ class ArxivPaperAnalyzer:
                     "full_text": "",
                     "field": field
                 })
-            
-            return result.get('text', '') if isinstance(result, dict) else result
+                return result.get('text', '') if isinstance(result, dict) else result
             
         except Exception as e:
-            print(f"错误详情: {str(e)}")
+            logger.error("API 调用失败:")
+            logger.error(f"错误类型: {type(e).__name__}")
+            logger.error(f"错误信息: {str(e)}")
+            logger.error("错误详情:", exc_info=True)
             raise
     
     def save_as_markdown(self, papers: List[Dict], analyses: List[str], timestamp: str) -> str:
@@ -789,22 +891,94 @@ class ArxivPaperAnalyzer:
     def _analyze_summaries(self, papers_info: str, date_range: str) -> str:
         """分析论文摘要，生成综合性报告"""
         try:
-            result = self.summary_chain.invoke({
-                "papers_info": papers_info,
-                "field": "未指定",  # 可以根据需要修改
-                "date_range": date_range
-            })
+            # 打印详细的输入信息
+            logger.info(f"论文信息长度: {len(papers_info)}")
+            logger.info(f"日期范围: {date_range}")
             
-            # 确保返回字符串
-            if isinstance(result, dict):
-                return result.get('text', '') 
-            elif isinstance(result, str):
+            # 使用更安全的调用方式
+            inputs = {
+                "papers_info": papers_info,
+                "field": "未指定",
+                "date_range": date_range
+            }
+            
+            # 尝试多种调用方法
+            try:
+                # 方法1: 使用 run 方法
+                result = self.summary_chain.run(inputs)
                 return result
-            else:
-                return str(result)
+            except Exception as e1:
+                logger.warning(f"run 方法失败: {str(e1)}")
+                
+                try:
+                    # 方法2: 直接调用 LLM
+                    messages = [
+                        SystemMessage(content="你是一个专业的论文分析助手。"),
+                        HumanMessage(content=self.summary_prompt.format(**inputs))
+                    ]
+                    llm_result = self.llm(messages)
+                    return llm_result.content
+                except Exception as e2:
+                    logger.error(f"直接 LLM 调用失败: {str(e2)}")
+                    
+                    try:
+                        # 方法3: 使用 invoke 方法
+                        result = self.summary_chain.invoke(inputs)
+                        
+                        # 详细的结果处理逻辑
+                        logger.info(f"返回结果类型: {type(result)}")
+                        logger.info(f"返回结果内容: {result}")
+                        
+                        # 处理不同类型的返回结果
+                        if isinstance(result, dict):
+                            # 处理 LangChain 返回的字典
+                            if 'text' in result:
+                                return result['text']
+                            elif 'generations' in result:
+                                return result['generations'][0]['text']
+                            else:
+                                return str(result)
+                        
+                        elif isinstance(result, str):
+                            return result
+                        
+                        # 处理 ChatResult 对象
+                        elif hasattr(result, 'generations'):
+                            # 打印详细的 generations 信息
+                            logger.info(f"Generations 详情: {result.generations}")
+                            
+                            # 尝试从 generations 中提取文本
+                            if result.generations and len(result.generations) > 0:
+                                generation = result.generations[0]
+                                
+                                # 处理不同类型的 generation
+                                if hasattr(generation, 'text'):
+                                    return generation.text
+                                elif hasattr(generation, 'message'):
+                                    return generation.message.content
+                                else:
+                                    return str(generation)
+                        
+                        # 最后的保底处理
+                        return str(result)
+                    
+                    except Exception as e3:
+                        logger.error(f"invoke 方法失败: {str(e3)}")
+                        return f"论文分析失败：{str(e3)}"
             
         except Exception as e:
-            print(f"摘要分析出错: {str(e)}")
+            logger.error(f"摘要分析出错: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            # 记录详细错误日志
+            with open('summary_analysis_error.log', 'w') as f:
+                f.write(f"错误信息: {str(e)}\n")
+                f.write("输入参数:\n")
+                f.write(f"论文信息长度: {len(papers_info)}\n")
+                f.write(f"日期范围: {date_range}\n")
+                traceback.print_exc(file=f)
+            
             return "无法生成摘要分析报告"
 
     def _extract_section(self, text: str, section_name: str) -> str:
@@ -940,6 +1114,7 @@ def main():
 
     model_type = "openai" if model_choice == "1" else "deepseek"
 
+    # 简化初始化，移除 provider_type 参数
     analyzer = ArxivPaperAnalyzer(model_type=model_type)
     
     while True:
@@ -970,14 +1145,12 @@ def main():
                     date_end = input("请输入结束日期 (YYYY-MM-DD): ")
             
             if choice == "1":
-                # 按领域浏览最新论文
                 analyzer.analyze_recent_papers(
                     max_papers=paper_count,
                     analyze_full_text=analyze_full_text
                 )
                 
             elif choice == "2":
-                # 纯关键词搜索
                 query = input("请输入搜索关键词: ")
                 analyzer.search_and_analyze_papers(
                     query=query,
@@ -988,7 +1161,6 @@ def main():
                 )
                 
             elif choice == "3":
-                # 在指定领域内搜索
                 query = input("请输入搜索关键词: ")
                 print("\n请选择搜索领域:")
                 field = analyzer.category_matcher.interactive_select()
