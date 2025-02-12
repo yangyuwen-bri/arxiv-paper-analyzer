@@ -479,57 +479,191 @@ class DocumentProcessor:
             from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
             from reportlab.lib.units import inch
             from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.ttfonts import TTFont
+            
+            # 注册中文字体
+            try:
+                # 尝试注册系统字体
+                if platform.system() == "Darwin":  # macOS
+                    pdfmetrics.registerFont(TTFont('SimSun', '/System/Library/Fonts/STHeiti Light.ttc'))
+                    default_font = 'SimSun'
+                elif platform.system() == "Windows":
+                    pdfmetrics.registerFont(TTFont('SimSun', 'C:\\Windows\\Fonts\\simsun.ttc'))
+                    default_font = 'SimSun'
+                else:  # Linux
+                    pdfmetrics.registerFont(TTFont('SimSun', '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc'))
+                    default_font = 'SimSun'
+            except:
+                # 如果无法注册中文字体，使用默认字体
+                print("警告：无法加载中文字体，将使用默认字体")
+                default_font = 'Helvetica'
             
             pdf_path = os.path.join(self.output_dir, f"{filename}.pdf")
-            doc = SimpleDocTemplate(pdf_path)
+            doc = SimpleDocTemplate(
+                pdf_path,
+                pagesize=(8.5 * inch, 11 * inch),
+                rightMargin=72,
+                leftMargin=72,
+                topMargin=72,
+                bottomMargin=72
+            )
             
             # 创建样式
             styles = getSampleStyleSheet()
-            custom_style = ParagraphStyle(
-                'CustomStyle',
+            
+            # 自定义标题样式
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontName=default_font,
+                fontSize=16,
+                spaceAfter=30,
+                leading=20
+            )
+            
+            # 自定义正文样式
+            body_style = ParagraphStyle(
+                'CustomBody',
                 parent=styles['Normal'],
-                fontName=self.font_manager.get_default_font(),
+                fontName=default_font,
                 fontSize=10,
                 leading=14,
-                firstLineIndent=20
+                firstLineIndent=20,
+                alignment=4  # 两端对齐
             )
             
             # 处理内容
             story = []
             for line in content.split('\n'):
-                if line.startswith('#'):
-                    # 处理标题
-                    level = line.count('#')
-                    text = line.strip('#').strip()
-                    style = styles[f'Heading{min(level, 4)}']
-                else:
-                    # 处理正文
-                    text = line
-                    style = custom_style
-                
-                if text:
+                if line.strip():
+                    if line.startswith('#'):
+                        # 处理标题
+                        level = line.count('#')
+                        text = line.strip('#').strip()
+                        style = ParagraphStyle(
+                            f'Heading{level}',
+                            parent=styles['Heading1'],
+                            fontName=default_font,
+                            fontSize=16 - (level * 2),  # 标题级别越深，字号越小
+                            spaceAfter=20,
+                            spaceBefore=20
+                        )
+                    else:
+                        # 处理正文
+                        text = line
+                        style = body_style
+                    
                     # 处理数学公式
                     text = self._process_math_for_reportlab(text)
-                    story.append(Paragraph(text, style))
-                    story.append(Spacer(1, 0.1 * inch))
+                    
+                    try:
+                        # 创建段落并添加到story中
+                        para = Paragraph(text, style)
+                        story.append(para)
+                        story.append(Spacer(1, 0.1 * inch))
+                    except Exception as e:
+                        print(f"警告：处理文本时出错: {str(e)}")
+                        continue
             
-            # 生成 PDF
+            # 生成PDF
             doc.build(story)
-            return pdf_path
+            
+            if os.path.exists(pdf_path):
+                print(f"PDF生成成功: {pdf_path}")
+                return pdf_path
+            return None
             
         except Exception as e:
             print(f"ReportLab 转换失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def _process_math_for_reportlab(self, text: str) -> str:
-        """处理数学公式"""
+        """处理数学公式和特殊字符，使其在 ReportLab 中正确显示"""
         import re
         
+        # 处理 HTML 特殊字符
+        html_entities = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        }
+        
+        # 替换 HTML 特殊字符
+        for char, entity in html_entities.items():
+            text = text.replace(char, entity)
+        
+        # 处理数学符号
+        math_symbols = {
+            '±': '&#177;',
+            '×': '&#215;',
+            '÷': '&#247;',
+            '∑': '&#8721;',
+            '∏': '&#8719;',
+            '∫': '&#8747;',
+            '∞': '&#8734;',
+            '≤': '&#8804;',
+            '≥': '&#8805;',
+            '≠': '&#8800;',
+            '→': '&#8594;',
+            '←': '&#8592;',
+            '⊆': '&#8838;',
+            '∈': '&#8712;',
+            '∉': '&#8713;',
+            '∪': '&#8746;',
+            '∩': '&#8745;'
+        }
+        
+        # 处理希腊字母
+        greek_letters = {
+            'α': '&#945;',
+            'β': '&#946;',
+            'γ': '&#947;',
+            'δ': '&#948;',
+            'ε': '&#949;',
+            'θ': '&#952;',
+            'λ': '&#955;',
+            'μ': '&#956;',
+            'π': '&#960;',
+            'σ': '&#963;',
+            'τ': '&#964;',
+            'φ': '&#966;',
+            'ω': '&#969;'
+        }
+        
+        # 替换数学符号和希腊字母
+        for symbol, entity in {**math_symbols, **greek_letters}.items():
+            text = text.replace(symbol, entity)
+        
+        # 处理行内公式
+        def process_inline_math(match):
+            formula = match.group(1)
+            # 将公式中的特殊字符转换为 HTML 实体
+            for symbol, entity in {**math_symbols, **greek_letters}.items():
+                formula = formula.replace(symbol, entity)
+            return f'<i>{formula}</i>'
+        
+        # 处理行间公式
+        def process_display_math(match):
+            formula = match.group(1)
+            # 将公式中的特殊字符转换为 HTML 实体
+            for symbol, entity in {**math_symbols, **greek_letters}.items():
+                formula = formula.replace(symbol, entity)
+            return f'<br/><i>{formula}</i><br/>'
+        
         # 替换行内公式
-        text = re.sub(r'\$(.+?)\$', r'<i>\1</i>', text)
+        text = re.sub(r'\$([^$]+?)\$', process_inline_math, text)
         
         # 替换行间公式
-        text = re.sub(r'\$\$(.+?)\$\$', r'<br/><i>\1</i><br/>', text)
+        text = re.sub(r'\$\$([^$]+?)\$\$', process_display_math, text)
+        
+        # 处理上下标
+        text = re.sub(r'_([a-zA-Z0-9]+)', r'<sub>\1</sub>', text)  # 下标
+        text = re.sub(r'\^([a-zA-Z0-9]+)', r'<sup>\1</sup>', text)  # 上标
         
         return text
 
