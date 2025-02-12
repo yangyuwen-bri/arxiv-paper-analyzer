@@ -451,12 +451,41 @@ class DocumentProcessor:
             # 转换 Markdown 为 HTML
             html_content = markdown.markdown(content)
             
+            # 根据系统选择合适的字体
+            if platform.system() == "Darwin":  # macOS
+                font_family = "'PingFang SC', 'Hiragino Sans GB', 'STHeiti'"
+            elif platform.system() == "Windows":
+                font_family = "'Microsoft YaHei', 'SimSun', 'SimHei'"
+            else:  # Linux
+                font_family = "'WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'Droid Sans Fallback'"
+            
             # 添加样式
-            css = CSS(string='''
-                body { font-family: Arial, sans-serif; }
-                h1 { color: #2c3e50; }
-                h2 { color: #34495e; }
-                pre { background-color: #f8f9fa; padding: 1em; }
+            css = CSS(string=f'''
+                @page {{
+                    size: A4;
+                    margin: 2.5cm;
+                }}
+                body {{
+                    font-family: {font_family}, Arial, sans-serif;
+                    line-height: 1.6;
+                }}
+                h1, h2, h3, h4, h5, h6 {{
+                    font-family: {font_family}, Arial, sans-serif;
+                    color: #2c3e50;
+                    margin-top: 1.5em;
+                    margin-bottom: 0.8em;
+                }}
+                pre {{
+                    background-color: #f8f9fa;
+                    padding: 1em;
+                    border-radius: 4px;
+                }}
+                code {{
+                    font-family: 'Courier New', Consolas, monospace;
+                }}
+                .math {{
+                    font-family: 'Latin Modern Math', 'STIX Two Math', serif;
+                }}
             ''')
             
             # 生成 PDF
@@ -486,17 +515,88 @@ class DocumentProcessor:
             try:
                 # 尝试注册系统字体
                 if platform.system() == "Darwin":  # macOS
-                    pdfmetrics.registerFont(TTFont('SimSun', '/System/Library/Fonts/STHeiti Light.ttc'))
-                    default_font = 'SimSun'
+                    # macOS 的字体路径选项
+                    font_paths = [
+                        '/System/Library/Fonts/PingFang.ttc',  # PingFang 字体
+                        '/System/Library/Fonts/Hiragino Sans GB.ttc',  # 冬青黑体
+                        '/System/Library/Fonts/STHeiti Light.ttc',  # 华文细黑
+                        '/System/Library/Fonts/STHeiti Medium.ttc',  # 华文中黑
+                        '/Library/Fonts/Microsoft/SimSun.ttf',  # 宋体（如果安装了 Office）
+                        '/Library/Fonts/Songti.ttc'  # 宋体
+                    ]
+                    
+                    # 尝试注册第一个可用的字体
+                    font_registered = False
+                    for font_path in font_paths:
+                        if os.path.exists(font_path):
+                            try:
+                                pdfmetrics.registerFont(TTFont('CustomFont', font_path))
+                                default_font = 'CustomFont'
+                                font_registered = True
+                                print(f"成功注册字体: {font_path}")
+                                break
+                            except Exception as e:
+                                print(f"注册字体 {font_path} 失败: {str(e)}")
+                                continue
+                    
+                    if not font_registered:
+                        print("警告：无法找到合适的中文字体，将使用默认字体")
+                        default_font = 'Helvetica'
+                        
                 elif platform.system() == "Windows":
-                    pdfmetrics.registerFont(TTFont('SimSun', 'C:\\Windows\\Fonts\\simsun.ttc'))
-                    default_font = 'SimSun'
+                    # Windows 字体路径
+                    font_paths = [
+                        'C:\\Windows\\Fonts\\simsun.ttc',  # 宋体
+                        'C:\\Windows\\Fonts\\msyh.ttc',    # 微软雅黑
+                        'C:\\Windows\\Fonts\\simhei.ttf'   # 黑体
+                    ]
+                    
+                    # 尝试注册第一个可用的字体
+                    font_registered = False
+                    for font_path in font_paths:
+                        if os.path.exists(font_path):
+                            try:
+                                pdfmetrics.registerFont(TTFont('CustomFont', font_path))
+                                default_font = 'CustomFont'
+                                font_registered = True
+                                print(f"成功注册字体: {font_path}")
+                                break
+                            except Exception as e:
+                                print(f"注册字体 {font_path} 失败: {str(e)}")
+                                continue
+                    
+                    if not font_registered:
+                        print("警告：无法找到合适的中文字体，将使用默认字体")
+                        default_font = 'Helvetica'
+                        
                 else:  # Linux
-                    pdfmetrics.registerFont(TTFont('SimSun', '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc'))
-                    default_font = 'SimSun'
-            except:
-                # 如果无法注册中文字体，使用默认字体
-                print("警告：无法加载中文字体，将使用默认字体")
+                    # Linux 字体路径
+                    font_paths = [
+                        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
+                        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+                        '/usr/share/fonts/truetype/droid/DroidSansFallback.ttf'
+                    ]
+                    
+                    # 尝试注册第一个可用的字体
+                    font_registered = False
+                    for font_path in font_paths:
+                        if os.path.exists(font_path):
+                            try:
+                                pdfmetrics.registerFont(TTFont('CustomFont', font_path))
+                                default_font = 'CustomFont'
+                                font_registered = True
+                                print(f"成功注册字体: {font_path}")
+                                break
+                            except Exception as e:
+                                print(f"注册字体 {font_path} 失败: {str(e)}")
+                                continue
+                    
+                    if not font_registered:
+                        print("警告：无法找到合适的中文字体，将使用默认字体")
+                        default_font = 'Helvetica'
+            
+            except Exception as e:
+                print(f"字体注册过程出错: {str(e)}")
                 default_font = 'Helvetica'
             
             pdf_path = os.path.join(self.output_dir, f"{filename}.pdf")
@@ -675,6 +775,14 @@ class DocumentProcessor:
             # 转换 Markdown 为 HTML
             html_content = markdown.markdown(content)
             
+            # 根据系统选择合适的字体
+            if platform.system() == "Darwin":  # macOS
+                font_family = "'PingFang SC', 'Hiragino Sans GB', 'STHeiti'"
+            elif platform.system() == "Windows":
+                font_family = "'Microsoft YaHei', 'SimSun', 'SimHei'"
+            else:  # Linux
+                font_family = "'WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'Droid Sans Fallback'"
+            
             # PDFKit 配置
             options = {
                 'encoding': 'UTF-8',
@@ -686,16 +794,34 @@ class DocumentProcessor:
                 'enable-local-file-access': None
             }
             
-            # 添加基本样式
+            # 添加基本样式，包括中文字体支持
             html_with_style = f"""
             <html>
                 <head>
                     <meta charset="UTF-8">
                     <style>
-                        body {{ font-family: Arial, sans-serif; margin: 20px; }}
-                        h1 {{ color: #2c3e50; }}
-                        h2 {{ color: #34495e; }}
-                        pre {{ background-color: #f8f9fa; padding: 1em; }}
+                        body {{
+                            font-family: {font_family}, Arial, sans-serif;
+                            margin: 20px;
+                            line-height: 1.6;
+                        }}
+                        h1, h2, h3, h4, h5, h6 {{
+                            font-family: {font_family}, Arial, sans-serif;
+                            color: #2c3e50;
+                            margin-top: 1.5em;
+                            margin-bottom: 0.8em;
+                        }}
+                        pre {{ 
+                            background-color: #f8f9fa;
+                            padding: 1em;
+                            border-radius: 4px;
+                        }}
+                        code {{
+                            font-family: 'Courier New', Consolas, monospace;
+                        }}
+                        .math {{
+                            font-family: 'Latin Modern Math', 'STIX Two Math', serif;
+                        }}
                     </style>
                 </head>
                 <body>
@@ -721,8 +847,10 @@ class DocumentProcessor:
     def _generate_pdf_fallback(self, content: str, filename: str) -> Optional[str]:
         """多重 PDF 转换方案"""
         methods = [
-            (self._generate_pdf_with_markdown, "md-to-pdf"),    # 首选方案
-            (self._generate_pdf_with_reportlab, "ReportLab"),   # 备选方案（纯 Python 实现）
+            (self._generate_pdf_with_markdown, "md-to-pdf"),     # 首选方案
+            (self._generate_pdf_with_weasyprint, "WeasyPrint"),  # 第二选择
+            (self._generate_pdf_with_pdfkit, "PDFKit"),         # 第三选择
+            (self._generate_pdf_with_reportlab, "ReportLab"),    # 最后备选
         ]
         
         for method, name in methods:
