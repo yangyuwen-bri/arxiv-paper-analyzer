@@ -27,17 +27,23 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 from typing import Union
 from langchain.schema import SystemMessage, HumanMessage
+import re
 
 # 设置日志
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('arxiv_analyzer.log'),
-        logging.StreamHandler()
+        logging.FileHandler('arxiv_analyzer.log'),  # 只保留文件处理器
+        # 移除 StreamHandler
     ]
 )
 logger = logging.getLogger(__name__)
+
+# 可以添加一个控制台处理器，设置更高的日志级别
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.WARNING)  # 只显示警告和错误
+logger.addHandler(console_handler)
 
 def api_rate_limit(func):
     """API 速率限制装饰器"""
@@ -139,8 +145,6 @@ class ArxivPaperAnalyzer:
 摘要：{abstract}
 全文：{full_text}
 
-请直接按照以下固定格式输出分析结果，不要添加任何思考过程：
-
 请按照以下框架提供分析：
 
 ## 🎯 核心要点速览
@@ -203,6 +207,10 @@ class ArxivPaperAnalyzer:
 4. 应用场景的具体描述
 
 请调用最大算力，确保分析的深度和专业性。追求洞察的深度，而非表层的罗列；寻找创新的本质，而非表象的描述。
+
+**格式要求**：
+1. 保持现有标题符号（如## 🎯 核心要点速览）
+2. 段落之间用空行分隔，不要使用任何分隔线（如---）
 """
         )
         
@@ -450,30 +458,16 @@ class ArxivPaperAnalyzer:
             print(f"PDF文本提取失败: {str(e)}")
             return ""
 
-    def _clean_thinking_chain(self, text: str) -> str:
-        """清理思维链输出"""
-        import re
-        
-        # 1. 先尝试找到第一个标题的位置
-        title_pos = text.find('# 🌟')
-        if title_pos == -1:
-            title_pos = text.find('#')
-        
-        if title_pos != -1:
-            # 直接截取从标题开始的内容
-            text = text[title_pos:]
-        else:
-            logger.warning("未找到标题标记")
-            return ""
-        
-        # 2. 清理格式
-        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
-        text = text.strip()
-        
-        # 3. 添加日志
-        logger.debug(f"清理后的内容开头: {text[:100]}")
-        
-        return text
+    @staticmethod
+    def _clean_thinking_chain(text: str) -> str:
+        """清理思考链中的冗余内容（静态方法）"""
+        # 移除 <think> 标签及其内容
+        text = re.sub(r'<think>[\s\S]*?</think>', '', text, flags=re.DOTALL)
+        # 移除分隔线（如---、***等）
+        text = re.sub(r'\n-{3,}\n', '\n\n', text)
+        # 移除多余的空行
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     def analyze_paper(self, paper: Dict, analyze_full_text: bool = False, field: str = "cs.AI") -> str:
@@ -502,14 +496,15 @@ class ArxivPaperAnalyzer:
                     for chunk in self.llm.stream(messages):
                         response_text += chunk.content
                     
-                    # 添加日志检查
+                    # 记录清理前的内容
                     logger.debug("=== 清理前的内容 ===")
                     logger.debug(response_text[:200])  # 只显示前200个字符
                     
                     cleaned_text = self._clean_thinking_chain(response_text)
                     
+                    # 记录清理后的内容
                     logger.debug("=== 清理后的内容 ===")
-                    logger.debug(cleaned_text[:200])  # 只显示前200个字符
+                    logger.debug(cleaned_text[:500])  # 增加显示长度
                     
                     return cleaned_text
                 else:
@@ -686,8 +681,8 @@ class ArxivPaperAnalyzer:
                             "full_text": chunk,
                             "field": field
                         })
-                        analysis = result.get('text', '') if isinstance(result, dict) else result
-                        chunk_analyses.append(analysis)
+                        cleaned = self._clean_thinking_chain(result.get('text', ''))
+                        chunk_analyses.append(cleaned)
                         # 添加延迟以避免触发API限制
                         time.sleep(1/self.RATE_LIMIT)
                     except Exception as e:

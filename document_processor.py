@@ -11,11 +11,13 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import SimpleDocTemplate, Paragraph
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 import platform
 from utils.document_converter import DocumentConverter
 from tenacity import retry, stop_after_attempt, wait_exponential
+from pathlib import Path
+from reportlab.lib.units import inch
 
 class AnalysisType(Enum):
     SUMMARY = "summary"  # 摘要分析
@@ -443,162 +445,74 @@ class DocumentProcessor:
         return self.document_converter.md_to_pdf(md_path)
 
     def _generate_pdf_with_weasyprint(self, content: str, filename: str) -> Optional[str]:
-        """使用 WeasyPrint 转换"""
+        """优化后的WeasyPrint方案"""
         try:
             from weasyprint import HTML, CSS
             from weasyprint.text.fonts import FontConfiguration
             
-            # 转换 Markdown 为 HTML
-            html_content = markdown.markdown(content)
-            
-            # 根据系统选择合适的字体
-            if platform.system() == "Darwin":  # macOS
-                font_family = "'PingFang SC', 'Hiragino Sans GB', 'STHeiti'"
-            elif platform.system() == "Windows":
-                font_family = "'Microsoft YaHei', 'SimSun', 'SimHei'"
-            else:  # Linux
-                font_family = "'WenQuanYi Micro Hei', 'Noto Sans CJK SC', 'Droid Sans Fallback'"
-            
-            # 添加样式
+            # 使用开源字体配置
+            font_config = FontConfiguration()
             css = CSS(string=f'''
+                @font-face {{
+                    font-family: 'Noto Sans CJK SC';
+                    src: url('https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/SubsetOTF/SC/NotoSansCJKsc-Regular.otf') format('opentype');
+                }}
                 @page {{
                     size: A4;
                     margin: 2.5cm;
+                    @top-center {{ content: "{filename}"; }}
                 }}
                 body {{
-                    font-family: {font_family}, Arial, sans-serif;
+                    font-family: 'Noto Sans CJK SC', Arial, sans-serif;
                     line-height: 1.6;
+                    font-size: 12pt;
                 }}
-                h1, h2, h3, h4, h5, h6 {{
-                    font-family: {font_family}, Arial, sans-serif;
+                h1, h2, h3 {{
                     color: #2c3e50;
                     margin-top: 1.5em;
-                    margin-bottom: 0.8em;
-                }}
-                pre {{
-                    background-color: #f8f9fa;
-                    padding: 1em;
-                    border-radius: 4px;
-                }}
-                code {{
-                    font-family: 'Courier New', Consolas, monospace;
+                    page-break-after: avoid;
                 }}
                 .math {{
-                    font-family: 'Latin Modern Math', 'STIX Two Math', serif;
+                    font-family: 'Latin Modern Math', 'Noto Sans Math', serif;
                 }}
             ''')
             
-            # 生成 PDF
+            # 转换Markdown为带样式的HTML
+            html_content = markdown.markdown(content)
+            html = f"<html><head><title>{filename}</title></head><body>{html_content}</body></html>"
+            
             pdf_path = os.path.join(self.output_dir, f"{filename}.pdf")
-            HTML(string=html_content).write_pdf(
+            HTML(string=html).write_pdf(
                 pdf_path,
                 stylesheets=[css],
-                font_config=FontConfiguration()
+                font_config=font_config
             )
             return pdf_path
         
         except Exception as e:
-            print(f"WeasyPrint 转换失败: {str(e)}")
+            self.logger.error(f"WeasyPrint转换失败: {str(e)}")
             return None
 
     def _generate_pdf_with_reportlab(self, content: str, filename: str) -> Optional[str]:
-        """使用 ReportLab 转换，支持中文和数学公式"""
+        """改进的ReportLab方案"""
         try:
-            from reportlab.lib import colors
-            from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-            from reportlab.lib.units import inch
-            from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
             
-            # 注册中文字体
-            try:
-                # 尝试注册系统字体
-                if platform.system() == "Darwin":  # macOS
-                    # macOS 的字体路径选项
-                    font_paths = [
-                        '/System/Library/Fonts/PingFang.ttc',  # PingFang 字体
-                        '/System/Library/Fonts/Hiragino Sans GB.ttc',  # 冬青黑体
-                        '/System/Library/Fonts/STHeiti Light.ttc',  # 华文细黑
-                        '/System/Library/Fonts/STHeiti Medium.ttc',  # 华文中黑
-                        '/Library/Fonts/Microsoft/SimSun.ttf',  # 宋体（如果安装了 Office）
-                        '/Library/Fonts/Songti.ttc'  # 宋体
-                    ]
-                    
-                    # 尝试注册第一个可用的字体
-                    font_registered = False
-                    for font_path in font_paths:
-                        if os.path.exists(font_path):
-                            try:
-                                pdfmetrics.registerFont(TTFont('CustomFont', font_path))
-                                default_font = 'CustomFont'
-                                font_registered = True
-                                print(f"成功注册字体: {font_path}")
-                                break
-                            except Exception as e:
-                                print(f"注册字体 {font_path} 失败: {str(e)}")
-                                continue
-                    
-                    if not font_registered:
-                        print("警告：无法找到合适的中文字体，将使用默认字体")
-                        default_font = 'Helvetica'
-                        
-                elif platform.system() == "Windows":
-                    # Windows 字体路径
-                    font_paths = [
-                        'C:\\Windows\\Fonts\\simsun.ttc',  # 宋体
-                        'C:\\Windows\\Fonts\\msyh.ttc',    # 微软雅黑
-                        'C:\\Windows\\Fonts\\simhei.ttf'   # 黑体
-                    ]
-                    
-                    # 尝试注册第一个可用的字体
-                    font_registered = False
-                    for font_path in font_paths:
-                        if os.path.exists(font_path):
-                            try:
-                                pdfmetrics.registerFont(TTFont('CustomFont', font_path))
-                                default_font = 'CustomFont'
-                                font_registered = True
-                                print(f"成功注册字体: {font_path}")
-                                break
-                            except Exception as e:
-                                print(f"注册字体 {font_path} 失败: {str(e)}")
-                                continue
-                    
-                    if not font_registered:
-                        print("警告：无法找到合适的中文字体，将使用默认字体")
-                        default_font = 'Helvetica'
-                        
-                else:  # Linux
-                    # Linux 字体路径
-                    font_paths = [
-                        '/usr/share/fonts/truetype/wqy/wqy-microhei.ttc',
-                        '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
-                        '/usr/share/fonts/truetype/droid/DroidSansFallback.ttf'
-                    ]
-                    
-                    # 尝试注册第一个可用的字体
-                    font_registered = False
-                    for font_path in font_paths:
-                        if os.path.exists(font_path):
-                            try:
-                                pdfmetrics.registerFont(TTFont('CustomFont', font_path))
-                                default_font = 'CustomFont'
-                                font_registered = True
-                                print(f"成功注册字体: {font_path}")
-                                break
-                            except Exception as e:
-                                print(f"注册字体 {font_path} 失败: {str(e)}")
-                                continue
-                    
-                    if not font_registered:
-                        print("警告：无法找到合适的中文字体，将使用默认字体")
-                        default_font = 'Helvetica'
-            
-            except Exception as e:
-                print(f"字体注册过程出错: {str(e)}")
+            # 注册Noto字体
+            font_path = self.font_manager.get_noto_font()
+            if Path(font_path).exists():
+                pdfmetrics.registerFont(TTFont('NotoSans', font_path))
+                default_font = 'NotoSans'
+            else:
                 default_font = 'Helvetica'
             
+            # 创建样式时使用注册的字体
+            styles = getSampleStyleSheet()
+            styles['Normal'].fontName = default_font
+            styles['Heading1'].fontName = default_font
+            
+            # 后续处理逻辑保持不变...
             pdf_path = os.path.join(self.output_dir, f"{filename}.pdf")
             doc = SimpleDocTemplate(
                 pdf_path,
@@ -607,30 +521,6 @@ class DocumentProcessor:
                 leftMargin=72,
                 topMargin=72,
                 bottomMargin=72
-            )
-            
-            # 创建样式
-            styles = getSampleStyleSheet()
-            
-            # 自定义标题样式
-            title_style = ParagraphStyle(
-                'CustomTitle',
-                parent=styles['Heading1'],
-                fontName=default_font,
-                fontSize=16,
-                spaceAfter=30,
-                leading=20
-            )
-            
-            # 自定义正文样式
-            body_style = ParagraphStyle(
-                'CustomBody',
-                parent=styles['Normal'],
-                fontName=default_font,
-                fontSize=10,
-                leading=14,
-                firstLineIndent=20,
-                alignment=4  # 两端对齐
             )
             
             # 处理内容
@@ -645,14 +535,14 @@ class DocumentProcessor:
                             f'Heading{level}',
                             parent=styles['Heading1'],
                             fontName=default_font,
-                            fontSize=16 - (level * 2),  # 标题级别越深，字号越小
+                            fontSize=16 - (level * 2),
                             spaceAfter=20,
                             spaceBefore=20
                         )
                     else:
                         # 处理正文
                         text = line
-                        style = body_style
+                        style = styles['Normal']
                     
                     # 处理数学公式
                     text = self._process_math_for_reportlab(text)

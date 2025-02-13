@@ -167,7 +167,6 @@ def display_papers():
             st.subheader("📋 论文核心要点")
             for i, (paper, analysis) in enumerate(zip(st.session_state.papers, st.session_state.analyses), 1):
                 with st.expander(f"论文 {i}: {paper['title']} - 核心要点", expanded=True):
-                    # 提取核心要点部分
                     core_points = extract_core_points(analysis)
                     st.markdown(core_points)
             
@@ -198,7 +197,8 @@ def display_papers():
         else:
             # 摘要分析：展示亮点速览
             with st.expander("📊 亮点速览", expanded=True):
-                st.markdown(st.session_state.analyses[0])
+                cleaned = ArxivPaperAnalyzer._clean_thinking_chain(st.session_state.analyses[0])
+                st.markdown(cleaned)
             
             # 检查 PDF 生成结果
             if st.session_state.output_files:
