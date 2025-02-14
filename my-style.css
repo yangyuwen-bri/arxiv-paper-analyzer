@@ -1,0 +1,8 @@
+@font-face {
+    font-family: 'Noto Sans CJK SC';
+    src: url('fonts/NotoSansCJKsc-Regular.otf') format('opentype');
+}
+
+body {
+    font-family: "Noto Sans CJK SC", "Source Han Sans SC", sans-serif; /* 思源黑体, Noto Sans CJK */
+}

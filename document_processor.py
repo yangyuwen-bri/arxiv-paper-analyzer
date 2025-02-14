@@ -18,6 +18,7 @@ from utils.document_converter import DocumentConverter
 from tenacity import retry, stop_after_attempt, wait_exponential
 from pathlib import Path
 from reportlab.lib.units import inch
+import logging
 
 class AnalysisType(Enum):
     SUMMARY = "summary"  # 摘要分析
@@ -104,6 +105,7 @@ class DocumentProcessor:
         self.pdf_processor = PDFProcessor()
         self.document_converter = DocumentConverter()
         self.font_manager = FontManager()
+        self.logger = logging.getLogger(__name__)
         
         # 设置LaTeX包
         self.latex_packages = [
@@ -436,13 +438,47 @@ class DocumentProcessor:
         """使用 md-to-pdf 转换 Markdown 到 PDF"""
         md_path = os.path.join(self.output_dir, f"{filename}.md")
         pdf_path = os.path.join(self.output_dir, f"{filename}.pdf")
-        
+        css_path = "my-style.css"  # CSS 文件路径
+
         # 写入 Markdown 文件
         with open(md_path, 'w', encoding='utf-8') as f:
             f.write(content)
-        
+
+        # 创建 CSS 文件（如果不存在）
+        self._create_css_file(css_path)
+
         # 调用 DocumentConverter 的 md_to_pdf 方法
-        return self.document_converter.md_to_pdf(md_path)
+        try:
+            # 确保 md-to-pdf 命令可用
+            subprocess.run(["md-to-pdf", "--version"], check=True, capture_output=True)
+            # 转换 Markdown 到 PDF
+            subprocess.run(["md-to-pdf", md_path, pdf_path, "--css", css_path], check=True)
+            return pdf_path
+        except subprocess.CalledProcessError as e:
+            print(f"md-to-pdf 转换失败: {e}")
+            print("请确保已安装 md-to-pdf 并将其添加到 PATH")
+            print("在 Streamlit Cloud 上，请确保 package.json 文件中包含 md-to-pdf 依赖")
+            return None
+        except FileNotFoundError:
+            print("未找到 md-to-pdf 命令")
+            print("请确保已安装 Node.js 和 md-to-pdf")
+            print("在 Streamlit Cloud 上，请确保 package.json 文件中包含 md-to-pdf 依赖")
+            return None
+
+    def _create_css_file(self, css_path: str) -> None:
+        """创建 CSS 文件（如果不存在）"""
+        if not os.path.exists(css_path):
+            with open(css_path, "w", encoding="utf-8") as f:
+                f.write("""
+@font-face {
+    font-family: 'Noto Sans CJK SC';
+    src: url('fonts/NotoSansCJKsc-Regular.otf') format('opentype');
+}
+
+body {
+    font-family: "Noto Sans CJK SC", "Source Han Sans SC", sans-serif; /* 思源黑体, Noto Sans CJK */
+}
+""")
 
     def _generate_pdf_with_weasyprint(self, content: str, filename: str) -> Optional[str]:
         """优化后的WeasyPrint方案"""

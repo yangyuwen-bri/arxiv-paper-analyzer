@@ -64,10 +64,10 @@ class DeepSeekProvider:
     @retry(
         stop=stop_after_attempt(MAX_RETRIES),
         wait=wait_exponential(multiplier=1, min=4, max=10),
-        before=before_log(logger, logging.DEBUG),
-        after=after_log(logger, logging.DEBUG)
+        before=before_log(logger, logging.INFO),
+        after=after_log(logger, logging.INFO)
     )
-    def _init_client(self):
+    def _init_client(self) -> None:
         """初始化客户端"""
         logger.info("初始化 DeepSeek 客户端")
         try:
@@ -76,7 +76,7 @@ class DeepSeekProvider:
                 api_key=NVIDIA_DEEPSEEK_CONFIG.get("api_key"),
                 temperature=0,  # 保持为0以获得确定性输出
                 top_p=1.0,     # 添加 top_p 参数
-                max_tokens=4096,
+                max_tokens=8192,  # 增加最大token数
                 callbacks=[LoggingCallback()]
             )
         except Exception as e:
@@ -114,7 +114,7 @@ class ArxivPaperAnalyzer:
         "3": (arxiv.SortCriterion.LastUpdatedDate, "最后更新时间")
     }
 
-    def __init__(self, model_type: str = "openai", openai_api_key: str = None, base_url: str = None):
+    def __init__(self, model_type: str = "openai", openai_api_key: str = None, base_url: str = None) -> None:
         """
         初始化分析器
         Args:
@@ -1056,7 +1056,7 @@ class ArxivPaperAnalyzer:
         return all_papers
 
 class PDFProcessor:
-    def __init__(self):
+    def __init__(self) -> None:
         self.tokenizer = tiktoken.get_encoding("cl100k_base")  # OpenAI的tokenizer
         self.token_limits = {
             "o1-preview": 32000,  # Claude 3 Opus

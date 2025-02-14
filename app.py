@@ -1,7 +1,7 @@
 import streamlit as st
 # 必须是第一个 Streamlit 命令
 st.set_page_config(
-    page_title="ArXiv论文分析工具",
+    page_title="AI新知库",
     page_icon="🔬",
     layout="wide"
 )
@@ -16,7 +16,7 @@ project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
 from arxiv_analyzer import ArxivPaperAnalyzer
-from document_processor import AnalysisType
+from document_processor import AnalysisType, DocumentProcessor
 
 def init_session_state():
     """初始化会话状态"""
@@ -29,6 +29,8 @@ def init_session_state():
         st.session_state.analyses = []
     if 'output_files' not in st.session_state:
         st.session_state.output_files = {}
+    if 'doc_processor' not in st.session_state:
+        st.session_state.doc_processor = DocumentProcessor()
 
 def sidebar_model_selection():
     """侧边栏模型选择"""
@@ -148,6 +150,7 @@ def search_papers(model_type: str, search_options: Dict):
                 st.session_state.papers = results.get('papers', [])
                 st.session_state.analyses = results.get('analyses', [])
                 st.session_state.output_files = results.get('outputs', {})
+                st.session_state.doc_processor = results.get('doc_processor', DocumentProcessor())
                 
                 st.success(f"成功获取 {len(st.session_state.papers)} 篇论文")
             except Exception as e:

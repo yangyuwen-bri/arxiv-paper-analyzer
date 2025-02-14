@@ -1,0 +1,8 @@
+    {
+      "engines": {
+        "node": "16.x"
+      },
+      "dependencies": {
+        "md-to-pdf": "^5.2.4"
+      }
+    }

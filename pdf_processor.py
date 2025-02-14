@@ -19,7 +19,7 @@ class PDFProcessor:
         }
         
         # 作者相关标记
-        self.author_markers = {
+        self.author_markers: Dict[str, List[str]] = {
             'start': ['Author', 'Authors', '∗', '*', '†', '1,', '1', 'a,', 'a'],
             'email': ['@', 'email:', 'Email:', 'E-mail:'],
             'affiliation': ['University', 'Institute', 'Laboratory', 'College', 'Corp.', 'Inc.']
@@ -43,7 +43,7 @@ class PDFProcessor:
             "o1-preview": 32768      # Claude的上下文窗口
         }
 
-    def _setup_logging(self):
+    def _setup_logging(self) -> None:
         """设置日志记录"""
         os.makedirs(self.log_dir, exist_ok=True)
         
@@ -158,7 +158,7 @@ class PDFProcessor:
         return "Unknown Title"
 
     def _extract_authors(self, page: fitz.Page) -> List[str]:
-        """提取作者信息"""
+        """提取作者信息（改进版）"""
         text = page.get_text()
         text_lines = text.split('\n')
         
@@ -169,14 +169,12 @@ class PDFProcessor:
             # 检查是否是作者行
             if any(marker in line for marker in self.author_markers['start']):
                 author_section_found = True
-                # 清理作者文本
-                author_text = line
-                for marker in self.author_markers['start']:
-                    author_text = author_text.replace(marker, ',')
-                
-                # 分割并清理作者名
-                for author in author_text.split(','):
+                # 尝试分割作者
+                potential_authors = re.split(r'[,;]\s*|\s+and\s+|\s+&\s+', line)
+                for author in potential_authors:
                     author = author.strip()
+                    # 移除可能的编号或符号
+                    author = re.sub(r'[,;]\s*|\s+and\s+|\s+&\s+', '', author)
                     if (author and 
                         len(author) > 2 and 
                         not any(marker in author.lower() for marker in self.author_markers['email']) and
@@ -206,7 +204,7 @@ class PDFProcessor:
         return [self._clean_text(author) for author in authors] if authors else ["Unknown"]
 
     def _extract_abstract(self, doc: fitz.Document) -> str:
-        """提取摘要"""
+        """提取摘要（改进版）"""
         first_page = doc[0]
         text = first_page.get_text()
         
@@ -241,12 +239,7 @@ class PDFProcessor:
         return self._clean_text(abstract)
 
     def _extract_full_text_with_latex(self, doc: fitz.Document) -> str:
-        """提取全文内容，保留LaTeX格式
-        Args:
-            doc: PyMuPDF文档对象
-        Returns:
-            str: 提取的文本内容
-        """
+        """提取全文内容，保留 LaTeX 格式（改进版）"""
         text = []
         math_pattern = re.compile(r'(\$[^$]+\$|\$\$[^$]+\$\$)')
         
@@ -260,9 +253,8 @@ class PDFProcessor:
                     for line in block["lines"]:
                         line_text = ""
                         for span in line["spans"]:
-                            # 检查是否是数学字体
-                            if span.get("flags", 0) & 2**0:  # 数学字体标志
-                                # 尝试恢复LaTeX格式
+                            # 尝试恢复 LaTeX 数学公式
+                            if any(c in span["text"] for c in ['$', '\\', '{', '}', '^', '_']):
                                 span_text = self._restore_latex_math(span["text"])
                             else:
                                 span_text = span["text"]
@@ -346,7 +338,7 @@ class PDFProcessor:
         return text
 
     def _clean_text(self, text: str) -> str:
-        """清理文本"""
+        """清理文本（改进版）"""
         # 移除多余的空白字符
         text = re.sub(r'\s+', ' ', text)
         # 移除特殊字符
