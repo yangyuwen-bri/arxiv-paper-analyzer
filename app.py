@@ -280,7 +280,7 @@ def extract_core_points(analysis: str) -> str:
 def main():
     init_session_state()
     
-    st.title("🌟 ArXiv 论文智能分析平台")
+    st.title("🌟 AI新知库")
     
     # 模型选择（简化后的版本）
     model_config = sidebar_model_selection()
