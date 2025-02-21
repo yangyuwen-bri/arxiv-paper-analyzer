@@ -43,3 +43,6 @@ paper_analyses/
 
 # 配置文件
 .env
+custom_download_folder/
+arxiv_cache/
+pdf_cache/
