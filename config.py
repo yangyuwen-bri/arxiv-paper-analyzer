@@ -18,8 +18,8 @@ def get_config_value(env_key: str, secret_key: str, default_value: str = "") -> 
 # 安全获取配置
 OPENAI_CONFIG = {
     "api_key": get_config_value("OPENAI_API_KEY", "OPENAI_API_KEY"),
-    "base_url": get_config_value("OPENAI_BASE_URL", "OPENAI_BASE_URL", "https://api.openai.xyz/v1"),
-    "model": get_config_value("OPENAI_MODEL", "OPENAI_MODEL", "o1-preview")
+    "base_url": get_config_value("OPENAI_BASE_URL", "OPENAI_BASE_URL", "https://www.apigptopen.xyz/v1"),
+    "model": get_config_value("OPENAI_MODEL", "OPENAI_MODEL", "o1-mini")
 }
 
 DEEPSEEK_CONFIG = {

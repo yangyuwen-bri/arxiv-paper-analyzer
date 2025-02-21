@@ -1,8 +1,8 @@
 streamlit
 arxiv
 langchain
-langchain-community
-langchain-openai
+langchain-community>=0.0.28
+langchain-openai>=0.0.8
 tenacity
 markdown
 beautifulsoup4
@@ -21,7 +21,7 @@ reportlab>=4.0.4
 nodejs
 md-to-pdf
 python-dotenv
-langchain_nvidia_ai_endpoints
+langchain_nvidia_ai_endpoints>=0.0.1
 weasyprint>=61.1
 pdfkit>=1.0.0
 python-json-logger>=2.0.7

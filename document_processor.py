@@ -18,6 +18,8 @@ from utils.document_converter import DocumentConverter
 from tenacity import retry, stop_after_attempt, wait_exponential
 from pathlib import Path
 from reportlab.lib.units import inch
+import streamlit as st
+import re
 
 class AnalysisType(Enum):
     SUMMARY = "summary"  # 摘要分析
@@ -241,13 +243,14 @@ class DocumentProcessor:
         content += "## 分析内容\n\n"
         
         for i, (paper, analysis) in enumerate(zip(papers, analyses), 1):
-            content += f"### 论文 {i}: {paper['title']}\n\n"
+            content += f"### 论文 {i}: {paper['title']}\n"
+            content += "### 核心分析\n"
+            content += f"{analysis}\n\n"
             
-            # 处理可能是字符串或列表的分析结果
-            if isinstance(analysis, list):
-                content += "\n\n".join(analysis) + "\n\n"
-            else:
-                content += str(analysis) + "\n\n"
+            # 新增微创新章节
+            if f"micro_{i}" in st.session_state:
+                content += "### 微创新理论\n"
+                content += f"{st.session_state[f'micro_{i}']}\n\n"
         
         return content
 
@@ -791,4 +794,17 @@ class DocumentProcessor:
         if missing:
             print(f"缺少以下依赖: {', '.join(missing)}")
             print("请使用以下命令安装:")
-            print(f"pip install {' '.join(missing)}") 
+            print(f"pip install {' '.join(missing)}")
+
+    @staticmethod
+    def format_micro_innovation(text: str) -> str:
+        """自动格式化模型输出为结构化内容"""
+        # 统一标题格式
+        text = re.sub(
+            r'### (.*?)\n', 
+            r'\n### \1\n', 
+            text
+        )
+        # 优化段落间距
+        text = re.sub(r'\n{2,}', '\n\n', text)
+        return text 

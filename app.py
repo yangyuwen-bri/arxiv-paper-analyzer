@@ -10,19 +10,28 @@ import sys
 import os
 import webbrowser
 from typing import Dict
+from langchain_community.document_loaders import PyMuPDFLoader
+import arxiv
+from datetime import datetime
 
 # 确保项目根目录在 Python 路径中
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
 from arxiv_analyzer import ArxivPaperAnalyzer
-from document_processor import AnalysisType, DocumentProcessor
+from document_processor import (
+    AnalysisType, 
+    DocumentProcessor,
+)
 
 def init_session_state():
     """初始化会话状态"""
     if 'analyzer' not in st.session_state:
         # 使用默认配置初始化
-        st.session_state.analyzer = ArxivPaperAnalyzer()
+        st.session_state.analyzer = ArxivPaperAnalyzer(
+            model_type="openai",
+            pdf_dir="custom_download_folder"  # 正确参数位置
+        )
     if 'papers' not in st.session_state:
         st.session_state.papers = []
     if 'analyses' not in st.session_state:
@@ -31,6 +40,8 @@ def init_session_state():
         st.session_state.output_files = {}
     if 'doc_processor' not in st.session_state:
         st.session_state.doc_processor = DocumentProcessor()
+    if 'micro_innovations' not in st.session_state:
+        st.session_state.micro_innovations = {}  # 结构：{arxiv_id: analysis_text}
 
 def sidebar_model_selection():
     """侧边栏模型选择"""
@@ -128,7 +139,8 @@ def sidebar_search_options():
 def search_papers(model_type: str, search_options: Dict):
     """搜索论文"""
     st.session_state.analyzer = ArxivPaperAnalyzer(
-        model_type=model_type
+        model_type=model_type,
+        pdf_dir="custom_download_folder"
     )
     
     with st.spinner("正在搜索和分析论文..."):
@@ -148,6 +160,13 @@ def search_papers(model_type: str, search_options: Dict):
                 )
                 
                 st.session_state.papers = results.get('papers', [])
+                # 将微创新结果存入独立存储
+                for paper in st.session_state.papers:
+                    if 'micro_innovation' in paper:
+                        paper_id = paper.get('arxiv_id')
+                        if paper_id:
+                            st.session_state.micro_innovations[paper_id] = paper['micro_innovation']
+                
                 st.session_state.analyses = results.get('analyses', [])
                 st.session_state.output_files = results.get('outputs', {})
                 st.session_state.doc_processor = results.get('doc_processor', DocumentProcessor())
@@ -157,8 +176,36 @@ def search_papers(model_type: str, search_options: Dict):
                 st.error(f"搜索失败: {str(e)}")
 
 def display_papers():
-    """展示论文和分析结果"""
+    st.markdown("""
+    <style>
+    .innovation-concept {
+        font-size: 1.3em;
+        color: #2c3e50;
+        border-left: 4px solid #3498db;
+        padding-left: 1rem;
+        margin: 1.5rem 0 1rem;
+    }
+    .innovation-section {
+        margin-left: 1.5rem;
+        padding: 0.8rem;
+        background: #f8f9fa;
+        border-radius: 6px;
+        line-height: 1.8;
+        text-indent: 2em;
+    }
+    .innovation-section strong {
+        color: #27ae60;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
     if st.session_state.papers:
+        # 在展示论文前添加路径检查
+        download_dir = st.session_state.analyzer.pdf_dir
+        if not os.path.exists(download_dir):
+            st.warning(f"下载目录 {download_dir} 不存在，已自动创建")
+            os.makedirs(download_dir)
+        
         # 先展示分析结果
         st.header("🔬 分析结果")
         
@@ -166,12 +213,12 @@ def display_papers():
         is_full_analysis = len(st.session_state.analyses) == len(st.session_state.papers)
         
         if is_full_analysis:
-            # 全文分析：展示每篇论文的核心要点
-            st.subheader("📋 论文核心要点")
-            for i, (paper, analysis) in enumerate(zip(st.session_state.papers, st.session_state.analyses), 1):
-                with st.expander(f"论文 {i}: {paper['title']} - 核心要点", expanded=True):
-                    core_points = extract_core_points(analysis)
-                    st.markdown(core_points)
+            # 全文分析：展示完整分析
+            with st.expander("📄 论文核心要点", expanded=False):
+                for i, analysis in enumerate(st.session_state.analyses, 1):
+                    cleaned = ArxivPaperAnalyzer._clean_thinking_chain(analysis)
+                    st.markdown(f"### 论文 {i} 分析")
+                    st.markdown(cleaned)
             
             # 检查 PDF 生成结果
             if st.session_state.output_files:
@@ -199,7 +246,7 @@ def display_papers():
                     )
         else:
             # 摘要分析：展示亮点速览
-            with st.expander("📊 亮点速览", expanded=True):
+            with st.expander("📊 亮点速览", expanded=False):
                 cleaned = ArxivPaperAnalyzer._clean_thinking_chain(st.session_state.analyses[0])
                 st.markdown(cleaned)
             
@@ -231,55 +278,173 @@ def display_papers():
         # 再展示论文列表
         st.header("📄 论文列表")
         for i, paper in enumerate(st.session_state.papers, 1):
-            with st.expander(f"{i}. {paper['title']}", expanded=False):
-                st.markdown(f"**作者**: {', '.join(paper['authors'])}")
-                st.markdown(f"**发布时间**: {paper['published']}")
-                st.markdown(f"**摘要**: {paper['abstract']}")
+            print(f"论文 {i} 的键: {paper.keys()}")  # 调试日志
+            current_paper = paper.copy()
+            
+            with st.expander(f"{i}. {current_paper['title']}", expanded=False):
+                st.markdown(f"**作者**: {', '.join(current_paper['authors'])}")
+                st.markdown(f"**发布时间**: {current_paper['published']}")
+                st.markdown(f"**摘要**: {current_paper['abstract']}")
                 
-                # 添加下载和链接按钮
-                col1, col2 = st.columns(2)
+                # 新增微创新按钮
+                col1, col2, col3 = st.columns([1,1,3])
                 with col1:
-                    st.link_button("📥 下载 PDF", paper['pdf_url'])
+                    st.link_button("📥 下载 PDF", current_paper['pdf_url'])
                 with col2:
-                    st.link_button("🔗 arXiv 链接", paper['arxiv_url'])
+                    st.link_button("🔗 arXiv 链接", current_paper['arxiv_url'])
+                with col3:
+                    # 兼容旧数据和新数据
+                    paper_id = current_paper.get('arxiv_id') or current_paper['arxiv_url'].split('/')[-1]
+                    if st.button("✨ 深度分析", key=f"detail_{i}"):
+                        st.session_state.current_paper_id = paper_id
+                        st.query_params["paper_id"] = paper_id
+                        st.rerun()
 
-def extract_core_points(analysis: str) -> str:
-    """从完整分析中提取核心要点"""
-    try:
-        # 定义可能的核心要点标题
-        sections = [
-            "## 🎯 核心要点速览", 
-            "## 核心要点速览", 
-            "## 🎯 核心要点", 
-            "## 核心要点"
-        ]
-        
-        # 尝试找到核心要点部分
-        for section in sections:
-            if section in analysis:
-                # 找到该部分后，提取到下一个二级标题之前的内容
-                start_index = analysis.index(section) + len(section)
-                next_section_match = analysis.find("## ", start_index)
-                
-                if next_section_match != -1:
-                    core_points = analysis[start_index:next_section_match].strip()
-                else:
-                    core_points = analysis[start_index:].strip()
-                
-                # 如果提取的内容太短，返回整个分析
-                if len(core_points) > 50:
-                    return core_points
-        
-        # 如果没有找到特定部分，尝试提取前500个字符
-        return analysis[:500] + "..."
+def show_innovation_analysis():
+    # 独立头部导航
+    col1, col2 = st.columns([2, 8])
+    with col1:
+        if st.button("← 返回论文列表", use_container_width=True):
+            del st.query_params["paper_id"]
+            st.rerun()
+    with col2:
+        st.title("✨ 微创新中心")
     
+    # 通过ID获取论文（支持历史记录）
+    paper_id = st.query_params.get("paper_id")
+    if not paper_id:
+        st.error("未指定论文ID")
+        return
+    
+    # 优先从微创新存储获取
+    if paper_id in st.session_state.micro_innovations:
+        analysis = st.session_state.micro_innovations[paper_id]
+        display_analysis(paper_id, analysis)
+        return
+    
+    # 兼容旧数据获取方式
+    paper = next((p for p in st.session_state.papers if p.get('arxiv_id') == paper_id), None)
+    if paper and 'micro_innovation' in paper:
+        st.session_state.micro_innovations[paper_id] = paper['micro_innovation']
+        display_analysis(paper_id, paper['micro_innovation'])
+    else:
+        st.warning("该论文尚未生成深度分析")
+
+    print(f"当前查询的paper_id: {paper_id}")
+    print(f"会话中的论文ID列表: {[p.get('arxiv_id') for p in st.session_state.papers]}")
+    print(f"微创新存储的键: {st.session_state.micro_innovations.keys()}")
+
+def display_analysis(paper_id: str, analysis: str):
+    """独立展示分析内容"""
+    # 获取基础信息（可扩展为数据库查询）
+    paper = get_paper_metadata(paper_id)  # 需要实现元数据获取方法
+    
+    with st.container():
+        # 信息展示区
+        col_info, col_actions = st.columns([3, 1])
+        with col_info:
+            st.subheader(paper['title'])
+            st.caption(f"作者：{', '.join(paper['authors'])} | 发布时间：{paper['published']}")
+        
+        with col_actions:
+            if st.button("🔄 重新生成分析"):
+                regenerate_analysis(paper_id)
+            
+            if st.download_button("📥 导出分析报告", 
+                                data=generate_report(analysis),
+                                file_name=f"{paper_id}_analysis.md"):
+                st.toast("导出成功！")
+        
+        # 分析内容展示
+        with st.expander("📄 原始论文摘要", expanded=True):
+            st.write(paper['abstract'])
+        
+        formatted = DocumentProcessor.format_micro_innovation(analysis)
+        st.markdown(f"""
+            <div style="
+                background: #f8f9fa;
+                padding: 1.5rem;
+                border-radius: 8px;
+                margin-top: 1rem;
+            ">
+                {formatted}
+            </div>
+        """, unsafe_allow_html=True)
+
+def get_paper_metadata(paper_id: str) -> Dict:
+    """获取论文元数据（从会话状态或API）"""
+    # 优先从会话状态获取
+    paper = next((p for p in st.session_state.papers if p.get('arxiv_id') == paper_id), None)
+    if paper:
+        return paper
+    
+    # 如果会话状态不存在，尝试通过ArXiv API获取
+    try:
+        search = arxiv.Search(id_list=[paper_id])
+        result = next(st.session_state.analyzer.client.results(search))
+        return st.session_state.analyzer._convert_result_to_paper(result)
     except Exception as e:
-        print(f"提取核心要点出错: {str(e)}")
-        return "无法提取核心要点"
+        st.error(f"无法获取论文元数据: {str(e)}")
+        return {
+            "title": "未知标题",
+            "authors": ["未知作者"],
+            "published": "未知日期",
+            "abstract": "无法获取摘要"
+        }
+
+def regenerate_analysis(paper_id: str):
+    """重新生成分析内容"""
+    with st.spinner("正在重新生成分析..."):
+        try:
+            # 获取论文数据
+            paper = get_paper_metadata(paper_id)
+            
+            # 下载并处理PDF
+            pdf_path = st.session_state.analyzer.download_pdf(
+                paper['pdf_url'], 
+                paper['arxiv_url']
+            )
+            loader = PyMuPDFLoader(pdf_path)
+            pages = loader.load()
+            full_text = "\n".join(page.page_content for page in pages)
+            
+            # 生成新分析
+            innovation = st.session_state.analyzer.micro_innovation_chain.invoke({
+                "title": paper["title"],
+                "abstract": paper["abstract"],
+                "full_text": full_text
+            })
+            
+            # 更新存储
+            st.session_state.micro_innovations[paper_id] = innovation['text']
+            st.rerun()
+            
+        except Exception as e:
+            st.error(f"重新生成失败: {str(e)}")
+
+def generate_report(analysis: str) -> str:
+    """生成可下载的分析报告"""
+    # 添加报告元数据
+    report = f"# 论文创新分析报告\n\n"
+    report += f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n"
+    report += "---\n\n"
+    
+    # 格式化内容
+    formatted = DocumentProcessor.format_micro_innovation(analysis)
+    report += formatted
+    
+    # 转换为字节流
+    return report.encode('utf-8')
 
 def main():
     init_session_state()
     
+    # 新增页面路由
+    if 'paper_id' in st.query_params:
+        show_innovation_analysis()
+        return
+    
+    # 原有主页面逻辑
     st.title("🌟 AI新知库")
     
     # 模型选择（简化后的版本）

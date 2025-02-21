@@ -114,17 +114,19 @@ class ArxivPaperAnalyzer:
         "3": (arxiv.SortCriterion.LastUpdatedDate, "最后更新时间")
     }
 
-    def __init__(self, model_type: str = "openai", openai_api_key: str = None, base_url: str = None) -> None:
+    def __init__(self, model_type: str = "openai", openai_api_key: str = None, 
+                base_url: str = None, pdf_dir: str = "downloaded_papers") -> None:
         """
         初始化分析器
         Args:
             model_type: 模型类型 ("openai" 或 "deepseek")
             openai_api_key: OpenAI API密钥
             base_url: OpenAI自定义API地址
+            pdf_dir: PDF存储目录
         """
         if model_type == "openai":
             self.llm = ChatOpenAI(
-                temperature=0,
+                temperature=1,
                 openai_api_key=openai_api_key or OPENAI_CONFIG["api_key"],
                 model_name=OPENAI_CONFIG["model"],
                 base_url=base_url or OPENAI_CONFIG["base_url"]
@@ -220,7 +222,7 @@ class ArxivPaperAnalyzer:
         )
         
         # 创建PDF保存目录
-        self.pdf_dir = "downloaded_papers"
+        self.pdf_dir = pdf_dir
         if not os.path.exists(self.pdf_dir):
             os.makedirs(self.pdf_dir)
         
@@ -278,6 +280,38 @@ class ArxivPaperAnalyzer:
         
         # 初始化PDFProcessor
         self.pdf_processor = PDFProcessor()
+        
+        # 新增微创新提示模板
+        self.micro_innovation_prompt = PromptTemplate(
+            input_variables=["title", "abstract", "full_text"],
+            template="""
+你是一位顶尖的科研创新分析师，擅长从学术论文中挖掘颠覆性概念。请基于以下论文内容，为普通读者生成3-5条具有社交媒体传播价值的微创新理论（根据论文的实际情况调整生成的条数，不要生硬拼凑）：
+
+# 论文信息
+标题：{title}
+摘要：{abstract}
+全文：{full_text}
+
+# 生成要求：
+1. 每条创新点需提出一个颠覆性的概念突破，超越论文本身的创新点，前所未有的想法。
+2. 使用通俗易懂的语言，避免过度技术化，让普通读者也能理解。
+3. 体现对未来技术发展趋势的深度洞察，具有启发性和前瞻性。
+4. 每条理论的字数控制在200字左右。
+5. 使用 Markdown 格式输出，按照以下格式：
+    ### [创新概念]
+    **[具体描述]**
+
+# 示例参考：
+### 逆向专业化（Reverse Professionalism）
+**AI驱动下的能力范式转移与逆向专业化已然成势。在技术平权效应催化下，知识生产领域正经历着范式级重构。基于生成式AI的认知增强工具链，正在消解传统专业领域的护城河，催生出"认知脱域"现象——原本固化的知识体系在算法介入下呈现出模块化、可迁移特性。这种变革本质上是对人类认知劳动的重组：业余者通过AI工具链实现认知杠杆效应，将碎片化知识转化为结构化专业输出，而传统专家若固守线性成长路径，其经验优势将被算法的指数级学习能力迅速稀释。深度观察可见，专业能力的评价维度正从知识储备量转向技术适配度，从经验积累深度转向工具驾驭精度。这种现象揭示出数字时代的能力构建法则：专业壁垒不再取决于学习时长，而取决于对智能工具的创造性运用能力。这种能力跃迁本质上是对人类认知框架的二次开发，标志着知识经济进入"增强智能"新纪元。**
+
+请用中文输出，保持专业性与可读性的平衡。"""
+        )
+        
+        self.micro_innovation_chain = LLMChain(
+            llm=self.llm,
+            prompt=self.micro_innovation_prompt
+        )
         
         self.logger = logger
     
@@ -395,15 +429,22 @@ class ArxivPaperAnalyzer:
             self.logger.error(f"arXiv API 调用失败: {str(e)}", exc_info=True)
             raise
 
-    def _convert_result_to_paper(self, result: Any) -> Dict:
+    def _convert_result_to_paper(self, result: arxiv.Result) -> Dict:
         """转换 arXiv 结果为标准格式"""
+        # 从entry_id提取arxiv_id，例如：http://arxiv.org/abs/2406.12345v1 → 2406.12345v1
+        arxiv_id = result.entry_id.split('/')[-1]
         return {
             "title": result.title,
-            "abstract": result.summary,
             "authors": [author.name for author in result.authors],
-            "published": result.published.strftime('%Y-%m-%d'),
+            "abstract": result.summary,
+            "published": result.published.strftime("%Y-%m-%d"),
+            "arxiv_url": result.entry_id,
+            "arxiv_id": arxiv_id,
             "pdf_url": result.pdf_url,
-            "arxiv_url": result.entry_id
+            "primary_category": result.primary_category,
+            "categories": result.categories,
+            "doi": result.doi if result.doi else "",
+            "comment": result.comment if result.comment else ""
         }
 
     def download_pdf(self, url: str, paper_id: str) -> str:
@@ -414,17 +455,19 @@ class ArxivPaperAnalyzer:
         Returns:
             str: PDF文件保存路径
         """
-        # 从arxiv URL中提取论文ID
-        file_name = f"{paper_id.split('/')[-1]}.pdf"
+        # 生成文件名示例：arXiv_2305.12345v1.pdf
+        file_name = f"arXiv_{paper_id.split('/')[-1]}.pdf"  
         save_path = os.path.join(self.pdf_dir, file_name)
         
-        # 如果文件已存在，直接返回路径
         if os.path.exists(save_path):
+            print(f"使用缓存文件：{save_path}")  # 添加日志输出
             return save_path
-            
+        
+        print(f"开始下载：{url}")  # 下载进度提示
         response = requests.get(url)
         with open(save_path, 'wb') as f:
             f.write(response.content)
+        print(f"文件已保存到：{save_path}")  # 下载完成提示
         return save_path
 
     def extract_text_from_pdf(self, pdf_path: str) -> str:
@@ -780,23 +823,47 @@ class ArxivPaperAnalyzer:
                 summary = self._analyze_summaries(papers_info, date_range)
                 analyses = [summary] if summary else []
             
+            # 合并分析结果
+            if analyze_full_text:
+                merged_analysis = self._merge_unique_points(analyses)
+            else:
+                merged_analysis = analyses[0] if analyses else ""
+            
             # 使用统一接口处理文档
             outputs = self.doc_processor.process_papers(
                 papers,
                 analysis_type,
-                analyses  # 确保传入列表
+                [merged_analysis]  # 确保传入单个元素
             )
+            
+            # 为每篇论文生成微创新分析
+            for paper in papers:
+                try:
+                    # 下载并处理PDF
+                    pdf_path = self.download_pdf(paper['pdf_url'], paper['arxiv_url'])
+                    loader = PyMuPDFLoader(pdf_path)
+                    pages = loader.load()
+                    full_text = "\n".join(page.page_content for page in pages)
+                    
+                    # 生成微创新分析
+                    innovation = self.micro_innovation_chain.invoke({
+                        "title": paper["title"],
+                        "abstract": paper["abstract"],
+                        "full_text": full_text
+                    })
+                    paper['micro_innovation'] = innovation['text']
+                except Exception as e:
+                    print(f"生成微创新分析失败: {str(e)}")
+                    paper['micro_innovation'] = "分析生成失败"
             
             return {
                 "papers": papers,
-                "analyses": analyses,
+                "analyses": [merged_analysis],
                 "outputs": outputs
             }
             
         except Exception as e:
             print(f"搜索分析过程出错: {str(e)}")
-            import traceback
-            traceback.print_exc()
             return {"papers": [], "analyses": [], "outputs": {}}
 
     def _split_text(self, text: str, chunk_size: int = 4000) -> List[str]:
@@ -1054,6 +1121,33 @@ class ArxivPaperAnalyzer:
                 break
                 
         return all_papers
+
+    def _merge_unique_points(self, analyses: List[str]) -> str:
+        """合并分析结果中的独特要点"""
+        unique_points = set()
+        
+        for analysis in analyses:
+            # 提取每个分析的核心要点
+            points = self._extract_core_points(analysis)
+            # 去重处理
+            unique_points.update(points.split("\n"))
+        
+        # 结构化输出
+        merged = "## 综合创新要点\n"
+        merged += "\n".join([f"- {point.strip()}" for point in unique_points if point.strip()])
+        return merged
+
+    @staticmethod
+    def _extract_core_points(analysis: str) -> str:
+        """从单篇分析中提取核心要点"""
+        # 查找核心要点部分
+        start_markers = ["## 🎯 核心要点速览", "## 核心要点"]
+        for marker in start_markers:
+            if marker in analysis:
+                start_idx = analysis.index(marker) + len(marker)
+                end_idx = analysis.find("## ", start_idx)
+                return analysis[start_idx:end_idx].strip()
+        return analysis[:500]  # 默认提取前500字符
 
 class PDFProcessor:
     def __init__(self) -> None:
